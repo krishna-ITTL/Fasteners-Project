@@ -31,6 +31,17 @@ Odd lengths (X25, X35, X45...) are automatically
 rounded up to nearest 10 (X30, X40, X50...).
 Output displays the rounded size.
 
+5) LATEST NEWS
+---------------
+2026-08-24 - Added a full backup of TANK HARDWARE LIST_FINAL_KRISH.xlsm
+under backups/Final BackUp/, together with the three real macros
+(print buttons, FINAL SHEET builder, VERIFICATION checker) saved as
+plain-text files with line-by-line, plain-English explanations - so
+the automation logic can be reviewed by anyone, not just someone who
+reads VBA. The older dated .xlsm-only snapshots from 22-Aug (before
+the FINAL SHEET rebuild and verification work) stay alongside it in
+backups/.
+
 ======================================
 IndoTech Internal Software
 ======================================

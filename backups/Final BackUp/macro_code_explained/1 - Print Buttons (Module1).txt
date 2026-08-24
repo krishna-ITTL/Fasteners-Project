@@ -1,0 +1,90 @@
+====================================================================
+MODULE: Module1
+WHAT THIS FILE DOES, IN ONE SENTENCE:
+    It is what runs when you press Ctrl+Shift+P or Ctrl+Shift+Q -
+    it refreshes FINAL SHEET (if you're on it) and then prints.
+====================================================================
+
+'>> PLAIN ENGLISH: Everything below this line, until the next
+'>> "==========" divider, is the ORIGINAL code, exactly as it is
+'>> in the workbook today. Lines starting with ">> PLAIN ENGLISH:"
+'>> are explanations added for this backup - they are not part of
+'>> the working macro.
+
+Attribute VB_Name = "Module1"
+
+'>> PLAIN ENGLISH: This is the first of the two print buttons. Its
+'>> keyboard shortcut is Ctrl+Shift+P (you can see that spelled out
+'>> a few lines down as "P\n14"). Think of this as the ordinary,
+'>> everyday "print this page" button.
+Sub PRINTOUTPUT()
+Attribute PRINTOUTPUT.VB_Description = "PRINT OUTPUT PAGE"
+Attribute PRINTOUTPUT.VB_ProcData.VB_Invoke_Func = "P\n14"
+'
+' PRINTOUTPUT Macro
+' PRINT OUTPUT PAGE
+'
+' Keyboard Shortcut: Ctrl+Shift+P
+'
+    '>> PLAIN ENGLISH: "If the sheet you're currently looking at is
+    '>> FINAL SHEET, first re-run the FINAL SHEET builder." This is
+    '>> a safety net: it stops you from ever printing an out-of-date
+    '>> FINAL SHEET just because you forgot to click REFRESH first.
+    '>> If you're printing any other sheet, this line does nothing.
+    If ActiveSheet.Name = "FINAL SHEET" Then Call RefreshFinalSheetVisibility
+    ' FINAL SHEET has no AutoFilter - calling ApplyFilter on Nothing
+    ' raised run-time error 91 and stopped the print.
+    '>> PLAIN ENGLISH: Some sheets in this workbook have a filter
+    '>> (the little drop-down arrows in the header row) that needs
+    '>> to be re-applied before printing, so hidden/filtered rows
+    '>> stay hidden on the printout. FINAL SHEET doesn't have one of
+    '>> those filters, so this line first checks "does a filter even
+    '>> exist here?" before trying to re-apply it - otherwise Excel
+    '>> would show an error and stop the print entirely.
+    If Not ActiveSheet.AutoFilter Is Nothing Then ActiveSheet.AutoFilter.ApplyFilter
+    '>> PLAIN ENGLISH: This is the actual "print now" instruction -
+    '>> the equivalent of you going to File > Print > Print and
+    '>> clicking OK. Copies:=1 means one copy; Collate:=True keeps
+    '>> multi-page printouts in the right page order.
+    ActiveWindow.SelectedSheets.PrintOut Copies:=1, Collate:=True, _
+        IgnorePrintAreas:=False
+End Sub
+
+'>> PLAIN ENGLISH: This is the second print button, Ctrl+Shift+Q.
+'>> It does everything the first one does, PLUS it makes sure the
+'>> sheet is locked (protected) both before and after printing, so
+'>> use this one when you want to print something that's meant to
+'>> stay locked from editing - e.g. a page you're handing out and
+'>> don't want anyone accidentally typing over.
+Sub PRINTPROTECTEDOUTPUT()
+Attribute PRINTPROTECTEDOUTPUT.VB_Description = "PRINT PROTECTED PAGE"
+Attribute PRINTPROTECTEDOUTPUT.VB_ProcData.VB_Invoke_Func = "Q\n14"
+'
+' PRINTPROTECTEDOUTPUT Macro
+' PRINT PROTECTED PAGE
+'
+' Keyboard Shortcut: Ctrl+Shift+Q
+'
+    '>> PLAIN ENGLISH: Same safety net as the other button - refresh
+    '>> FINAL SHEET first, if that's the sheet you're on.
+    If ActiveSheet.Name = "FINAL SHEET" Then Call RefreshFinalSheetVisibility
+    '>> PLAIN ENGLISH: Temporarily unlock the sheet. This has to
+    '>> happen because the very next line needs to change the
+    '>> filter, and Excel won't allow that on a locked sheet.
+    ActiveSheet.Unprotect
+    If Not ActiveSheet.AutoFilter Is Nothing Then ActiveSheet.AutoFilter.ApplyFilter
+    '>> PLAIN ENGLISH: Lock the sheet back up before printing, so the
+    '>> printed page (and the sheet afterwards) is protected again.
+    '>> "DrawingObjects/Contents/Scenarios:=True" just means "protect
+    '>> the buttons and pictures, the cell contents, and any what-if
+    '>> scenarios" - i.e. protect everything.
+    ActiveSheet.Protect DrawingObjects:=True, Contents:=True, Scenarios:=True
+    '>> PLAIN ENGLISH: Same "print now" instruction as the other
+    '>> button.
+    ActiveWindow.SelectedSheets.PrintOut Copies:=1, Collate:=True, _
+        IgnorePrintAreas:=False
+End Sub
+
+====================================================================
+END OF MODULE1
+====================================================================
