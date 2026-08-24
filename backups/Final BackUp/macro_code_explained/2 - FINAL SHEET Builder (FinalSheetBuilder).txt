@@ -1,0 +1,751 @@
+====================================================================
+MODULE: FinalSheetBuilder
+WHAT THIS FILE DOES, IN ONE SENTENCE:
+    This is the code behind the REFRESH button on FINAL SHEET - it
+    reads every hardware line on PRINT SHEET, adds up how many
+    bolts/studs/nuts/washers of each size-and-material combination
+    are needed, and writes that shopping-list summary onto FINAL
+    SHEET.
+====================================================================
+
+'>> PLAIN ENGLISH: Everything below this line, until the next
+'>> "==========" divider, is the ORIGINAL code, exactly as it is in
+'>> the workbook today. Lines starting with ">> PLAIN ENGLISH:" are
+'>> explanations added for this backup - they are not part of the
+'>> working macro.
+'>>
+'>> BIG PICTURE, before you read the detail below:
+'>> FINAL SHEET has three "blocks" (sections) of rows:
+'>>   Block 1 (rows 11-34)  = nuts & washers, grouped by size+material
+'>>   Block 2 (rows 37-96)  = bolts, grouped by size+length+material
+'>>   Block 3 (rows 99-125) = studs, grouped by size+length+material
+'>> Every time you press REFRESH, this macro empties all three
+'>> blocks and rebuilds them from scratch by reading PRINT SHEET
+'>> top to bottom. That way FINAL SHEET can never show a size or
+'>> material combination that isn't actually somewhere in the job -
+'>> and it can never miss one either.
+
+Attribute VB_Name = "FinalSheetBuilder"
+'=======================================================================
+' FINAL SHEET - self-building procurement summary
+'
+' Builds the three blocks of FINAL SHEET directly from PRINT SHEET,
+' keyed on SIZE + LENGTH + MATERIAL. Replaces the old hand-typed size
+' list, which could only ever show combinations someone typed in
+' advance and forced MATERIAL to the global E7/E8 values (so an SS
+' line such as M12x60-SS could never appear).
+'
+' Writes SIZE and MATERIAL as values, QUANTITY as a live SUMIF formula,
+' then hides every unused row. Values are written into merged cells,
+' which is allowed - a spilling dynamic array into merged cells is not.
+'=======================================================================
+
+' --- Block geometry. Update here if the sheet layout ever changes. ---
+'>> PLAIN ENGLISH: These six numbers are simply "which row does each
+'>> block start and end on". If someone ever redesigns FINAL SHEET
+'>> and moves these sections to different rows, these six numbers
+'>> are the ONLY place that needs to change - everything else in
+'>> the code refers back to these instead of typing row numbers
+'>> directly, so there's only one place to get it right.
+Public Const FS_B1_FIRST As Long = 11
+Public Const FS_B1_LAST  As Long = 34
+Public Const FS_B2_FIRST As Long = 37
+Public Const FS_B2_LAST  As Long = 96
+Public Const FS_B3_FIRST As Long = 99
+Public Const FS_B3_LAST  As Long = 125
+
+' --- PRINT SHEET source range ---
+' PS_MIN_LAST is a floor, not a limit: the real last row is measured
+' every run, so the summary keeps working if PRINT SHEET grows.
+'>> PLAIN ENGLISH: PRINT SHEET's hardware list starts at row 9. The
+'>> macro always re-checks how far down the list actually goes each
+'>> time you press REFRESH (see "lastRow" further down) rather than
+'>> assuming it stops at a fixed row - so if more hardware rows get
+'>> added later, FINAL SHEET will automatically pick them up.
+'>> PS_HARD_MAX (20,000) is just a sanity ceiling: if the sheet
+'>> somehow looks like it runs to 20,000+ rows, that's almost
+'>> certainly a mistake somewhere else, so the macro stops and warns
+'>> you instead of trying to process a runaway range.
+Public Const PS_FIRST    As Long = 9
+Public Const PS_MIN_LAST As Long = 245
+Public Const PS_HARD_MAX As Long = 20000
+
+' --- Test seam. When gSilent is True the macro records its message in
+'     gLastProblem instead of showing a dialog, so the guard paths can
+'     be exercised automatically. Production use leaves gSilent False.
+'>> PLAIN ENGLISH: These two lines exist purely for automated testing
+'>> behind the scenes (so a test script can run the macro and read
+'>> back "what warning would have popped up?" without a pop-up
+'>> actually appearing and blocking the test). In everyday use you
+'>> will never interact with these directly - warnings always show
+'>> up as normal pop-up messages for you.
+Public gSilent As Boolean
+Public gLastProblem As String
+
+
+' Diagnostics. SetSilentMode True suppresses the dialog so an automated
+' check can read the outcome back from LastProblem instead.
+Public Sub SetSilentMode(ByVal quiet As Boolean)
+    gSilent = quiet
+End Sub
+
+Public Function LastProblem() As String
+    LastProblem = gLastProblem
+End Function
+
+
+'-----------------------------------------------------------------------
+' Back-compat wrapper. The Print macros (PRINTOUTPUT /
+' PRINTPROTECTEDOUTPUT, Ctrl+Shift+P / Ctrl+Shift+Q) call this name.
+'-----------------------------------------------------------------------
+'>> PLAIN ENGLISH: This is just a relay/forwarder - it exists because
+'>> the print buttons (in Module1) were already written to call
+'>> something named "RefreshFinalSheetVisibility". Rather than go
+'>> back and change the print buttons, this tiny routine just passes
+'>> the call straight through to the real builder below. You can
+'>> ignore this one; nothing decision-worthy happens here.
+Sub RefreshFinalSheetVisibility()
+    Call RebuildFinalSheet
+End Sub
+
+
+'-----------------------------------------------------------------------
+' Main entry point. Assigned to the REFRESH button on FINAL SHEET.
+'-----------------------------------------------------------------------
+'>> PLAIN ENGLISH: ============================================
+'>> THIS IS THE MAIN MACRO. Everything else in this file is just a
+'>> helper that this one calls. Read this Sub top to bottom to
+'>> understand the whole REFRESH process; the "helpers" section
+'>> further down explains each helper the first time it's used.
+'>> ================================================================
+Sub RebuildFinalSheet()
+    Dim ws As Worksheet, ps As Worksheet
+    Dim src As Variant
+    Dim i As Long, lastRow As Long
+    Dim d1 As Object, d2 As Object, d3 As Object
+    Dim re As Object, mc As Object
+    Dim desig As String, sz As String, mat As String
+    Dim lng As Long, isStud As Boolean
+    Dim k As String, cell As Variant
+    Dim bad As String, badN As Long
+    Dim msg As String
+    Dim prevCalc As Long, calcSaved As Boolean
+    Dim prevScreen As Boolean, prevEvents As Boolean
+
+    gLastProblem = ""
+
+    ' Capture host state BEFORE arming the handler that restores it,
+    ' so the handler can never write back an uninitialised value.
+    '>> PLAIN ENGLISH: Before doing anything, the macro notes down
+    '>> three "how is Excel currently behaving" settings (is screen
+    '>> updating on, are events on, is calculation automatic or
+    '>> manual) so it can politely put them back exactly how it found
+    '>> them when it's done - even if something goes wrong partway
+    '>> through. This is just good manners: don't leave Excel in a
+    '>> different state than you found it.
+    prevScreen = Application.ScreenUpdating
+    prevEvents = Application.EnableEvents
+    prevCalc = Application.Calculation
+    calcSaved = True
+
+    '>> PLAIN ENGLISH: "On Error GoTo Fail" means: if literally
+    '>> anything unexpected goes wrong anywhere from this point on
+    '>> (a sheet renamed, a formula broken, etc.), skip straight down
+    '>> to the "Fail:" section near the bottom, which safely restores
+    '>> Excel's settings and shows you a plain error message instead
+    '>> of crashing or leaving things half-done.
+    On Error GoTo Fail
+
+    Set ws = ThisWorkbook.Sheets("FINAL SHEET")
+    Set ps = ThisWorkbook.Sheets("PRINT SHEET")
+
+    ' Make sure PRINT SHEET is current before we read its values.
+    '>> PLAIN ENGLISH: Before reading any numbers off PRINT SHEET,
+    '>> force Excel to fully recalculate that sheet first. This
+    '>> matters because PRINT SHEET's own cells are formulas that
+    '>> pull from TANK HARDWARE - if Excel's automatic calculation
+    '>> had been switched off for any reason, this line switches it
+    '>> back on and forces a recalculation so the numbers this macro
+    '>> is about to read are guaranteed fresh, not stale leftovers.
+    If Application.Calculation <> xlCalculationAutomatic Then
+        Application.Calculation = xlCalculationAutomatic
+    End If
+    ps.Calculate
+
+    ' Measure the source every run. A hardcoded end row would silently
+    ' ignore hardware added past it, under-ordering with no warning.
+    '>> PLAIN ENGLISH: This finds the actual last row of real data on
+    '>> PRINT SHEET (by looking down column F, the designation
+    '>> column, until it hits an empty cell). This is the "self-
+    '>> adjusting" behaviour mentioned earlier: if 245 is still the
+    '>> floor and nothing was added, it uses 245; if more rows were
+    '>> added since, it uses however far the list actually goes.
+    lastRow = ps.Cells(ps.Rows.Count, "F").End(xlUp).Row
+    If lastRow < PS_MIN_LAST Then lastRow = PS_MIN_LAST
+    If lastRow > PS_HARD_MAX Then
+        msg = "PRINT SHEET appears to run to row " & lastRow & _
+              ", which is beyond the " & PS_HARD_MAX & " row limit." & _
+              vbLf & vbLf & "Nothing has been changed."
+        GoTo Abort
+    End If
+
+    '>> PLAIN ENGLISH: Turn off screen redrawing and Excel's normal
+    '>> "something changed, react to it" events while the macro is
+    '>> working. This is purely a speed/stability trick - it stops
+    '>> Excel from repainting the screen or firing other macros for
+    '>> every single tiny change the code makes, which would
+    '>> otherwise make this take much longer and could trigger
+    '>> unwanted side effects. Nothing you see on screen is affected
+    '>> once REFRESH finishes.
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    ' One bulk read: F=designation, G=qty, H=nut, I=p.washer,
+    ' J=s.washer, K=l.nut
+    '>> PLAIN ENGLISH: Rather than reading PRINT SHEET one cell at a
+    '>> time (which is slow), the macro reads the whole block of
+    '>> columns F through K, every row from 9 to the last row, in one
+    '>> single operation into memory. From here on it works with that
+    '>> in-memory copy, which is much faster, and only writes back to
+    '>> the actual sheet once at the end.
+    src = ps.Range("F" & PS_FIRST & ":K" & lastRow).Value
+
+    '>> PLAIN ENGLISH: These three "dictionaries" are just running-
+    '>> total tally sheets that live in memory while the macro works
+    '>> - not visible anywhere on screen. Think of each one as a
+    '>> notepad where the macro writes "M12 / HDG-8.8 -> 40 nuts, 40
+    '>> plain washers..." and keeps adding to that same line every
+    '>> time it sees another matching row, instead of writing a new
+    '>> line for every single row of PRINT SHEET.
+    '>>   d1 = tally of nuts/washers, one line per SIZE+MATERIAL
+    '>>   d2 = tally of BOLT quantities, one line per SIZE+LENGTH+MATERIAL
+    '>>   d3 = tally of STUD quantities, one line per SIZE+LENGTH+MATERIAL
+    Set d1 = CreateObject("Scripting.Dictionary")   ' size|material -> nut,pw,sw,ln
+    Set d2 = CreateObject("Scripting.Dictionary")   ' sizeXlen|mat  -> bolt qty
+    Set d3 = CreateObject("Scripting.Dictionary")   ' sizeXlen|mat  -> stud qty
+
+    '>> PLAIN ENGLISH: This sets up a "pattern matcher" (a regular
+    '>> expression) whose only job is to take a text designation like
+    '>> "M12x60-HDG-8.8" and split it into its four meaningful parts:
+    '>> the thread size (M12), whether it's a stud, the length (60),
+    '>> and the material (HDG-8.8). It's the same idea as a mail-
+    '>> merge template recognising "the third word is always the
+    '>> postcode" - just applied to hardware codes instead of
+    '>> addresses.
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = False
+    re.IgnoreCase = True
+    ' M12x60-HDG-8.8   /   M12-STUDx60-HDG-8.8
+    ' Material is everything after the length separator, so it may
+    ' itself contain hyphens (HDG-8.8).
+    re.Pattern = "^\s*(M\d+)\s*(-STUD)?\s*x\s*(\d+)\s*-\s*(.+?)\s*$"
+
+    '>> PLAIN ENGLISH: =========== THE MAIN LOOP ===========
+    '>> This "For" block is the heart of the macro: it walks down
+    '>> PRINT SHEET one row at a time (from the in-memory copy made
+    '>> above), reads the designation in that row, works out its
+    '>> size/length/material, and adds that row's bolt/stud/nut/
+    '>> washer quantities onto the correct running total. By the time
+    '>> this loop finishes, d1/d2/d3 hold the complete, final totals
+    '>> for the whole job - nothing has been written to the sheet
+    '>> yet, that happens further down.
+    For i = 1 To UBound(src, 1)
+        cell = src(i, 1)
+
+        ' IsError must be tested first: concatenating an error value
+        ' raises a type mismatch, and VBA's And does not short-circuit.
+        '>> PLAIN ENGLISH: First check: is this cell actually a
+        '>> broken formula (showing something like #REF! or #VALUE!)?
+        '>> If so, count it as a problem row and move on - it does
+        '>> NOT try to guess or skip silently.
+        If IsError(cell) Then
+            badN = badN + 1
+            If badN <= 8 Then bad = bad & vbLf & "    row " & _
+                (PS_FIRST + i - 1) & ":  (error value)"
+        ElseIf Not IsEmpty(cell) Then
+            '>> PLAIN ENGLISH: If the cell isn't blank, take its text
+            '>> and try to match it against the M12x60-HDG-8.8-style
+            '>> pattern described above.
+            desig = Trim$(CStr(cell))
+            If Len(desig) > 0 Then
+                If re.Test(desig) Then
+                    '>> PLAIN ENGLISH: The pattern matched - pull out
+                    '>> the four pieces: size (e.g. "M12"), whether
+                    '>> it's a stud, the length (e.g. 60), and the
+                    '>> material (e.g. "HDG-8.8").
+                    Set mc = re.Execute(desig)(0)
+                    sz = UCase$(mc.SubMatches(0))
+                    isStud = (Len(mc.SubMatches(1)) > 0)
+                    lng = CLng(mc.SubMatches(2))
+                    mat = Trim$(mc.SubMatches(3))
+
+                    ' Block 1 - nuts and washers, by size + material.
+                    ' Deliberately includes stud rows whose stud qty is
+                    ' 0 (welded pad joints): the studs are not bought,
+                    ' but their nuts and washers are.
+                    '>> PLAIN ENGLISH: Add this row's nut count, plain-
+                    '>> washer count, spring-washer count and lock-nut
+                    '>> count onto the running total for this exact
+                    '>> size+material combination (Block 1 of FINAL
+                    '>> SHEET). Note: this happens even for a "welded
+                    '>> pad" stud row where 0 studs are being bought -
+                    '>> because the nuts and washers for that joint
+                    '>> are still bought even though the stud itself
+                    '>> isn't (it's welded in instead of a separate
+                    '>> part).
+                    k = sz & "|" & mat
+                    If Not d1.Exists(k) Then d1(k) = Array(0#, 0#, 0#, 0#)
+                    Dim v As Variant
+                    v = d1(k)
+                    v(0) = v(0) + Num(src(i, 3))
+                    v(1) = v(1) + Num(src(i, 4))
+                    v(2) = v(2) + Num(src(i, 5))
+                    v(3) = v(3) + Num(src(i, 6))
+                    d1(k) = v
+
+                    ' Blocks 2 / 3 - the fastener itself.
+                    ' Studs keep their "-STUD" marker in the key:
+                    ' without it a stud row would be written as e.g.
+                    ' M16X75 and its SUMIF would match the *bolt*
+                    ' M16x75 instead.
+                    '>> PLAIN ENGLISH: Now add the actual bolt or stud
+                    '>> quantity from this row onto its own running
+                    '>> total - studs go into the stud tally (Block 3
+                    '>> of FINAL SHEET), everything else goes into the
+                    '>> bolt tally (Block 2). Studs are kept clearly
+                    '>> separate from bolts of the same size and
+                    '>> length so a M16x75 STUD line can never get
+                    '>> mixed up with, or accidentally added to, a
+                    '>> M16x75 BOLT line.
+                    If isStud Then
+                        k = sz & "-STUDX" & lng & "|" & mat
+                        d3(k) = Num(d3(k)) + Num(src(i, 2))
+                    Else
+                        k = sz & "X" & lng & "|" & mat
+                        d2(k) = Num(d2(k)) + Num(src(i, 2))
+                    End If
+                Else
+                    '>> PLAIN ENGLISH: The text in this cell did NOT
+                    '>> match the expected "M12x60-HDG-8.8" pattern at
+                    '>> all - e.g. a typo, or stray text. This is
+                    '>> logged as a problem row rather than guessed
+                    '>> at or silently dropped, so nothing gets
+                    '>> quietly left out of the order.
+                    badN = badN + 1
+                    If badN <= 8 Then bad = bad & vbLf & "    row " & _
+                        (PS_FIRST + i - 1) & ":  " & desig
+                End If
+            End If
+        End If
+    Next i
+
+    ' Report unreadable designations rather than silently dropping them.
+    '>> PLAIN ENGLISH: If ANY row couldn't be read properly, stop here
+    '>> completely - don't build a partial or wrong FINAL SHEET. Show
+    '>> a pop-up listing exactly which rows had a problem (up to the
+    '>> first 8, plus a count of how many more) and leave FINAL SHEET
+    '>> exactly as it was before you pressed REFRESH.
+    If badN > 0 Then
+        msg = "FINAL SHEET could not read " & badN & _
+              " designation(s) on PRINT SHEET:" & bad
+        If badN > 8 Then msg = msg & vbLf & "    ... and " & _
+            (badN - 8) & " more"
+        msg = msg & vbLf & vbLf & _
+              "Expected format:  M12x60-HDG-8.8  or  M12-STUDx60-HDG-8.8" & _
+              vbLf & vbLf & "Nothing has been changed."
+        GoTo Abort
+    End If
+
+    ' Capacity check before writing anything.
+    '>> PLAIN ENGLISH: Each of the three blocks on FINAL SHEET only
+    '>> has a fixed number of rows available (see the FS_B1/B2/B3
+    '>> constants near the top). Before writing anything, the macro
+    '>> checks "will this job's list of distinct sizes/materials
+    '>> actually fit in the space available?" If not, it stops and
+    '>> tells you the block needs to be made bigger, rather than
+    '>> silently cutting off the list partway through and under-
+    '>> ordering hardware.
+    msg = CapacityMsg("SIZE", CountNonZero1(d1), FS_B1_LAST - FS_B1_FIRST + 1)
+    If Len(msg) = 0 Then msg = CapacityMsg("BOLT SIZE", _
+        CountNonZero(d2), FS_B2_LAST - FS_B2_FIRST + 1)
+    If Len(msg) = 0 Then msg = CapacityMsg("STUD SIZE", _
+        CountNonZero(d3), FS_B3_LAST - FS_B3_FIRST + 1)
+    If Len(msg) > 0 Then GoTo Abort
+
+    ' Refuse if one material name is a suffix of another - the Block 1
+    ' wildcard SUMIF (size & "x*-" & material) would count both.
+    '>> PLAIN ENGLISH: This is a subtle but important safety check.
+    '>> Block 1's totals are calculated with a formula that searches
+    '>> for text ending in the material name (e.g. "...-SS"). If two
+    '>> different material names in this job happen to be such that
+    '>> one is literally the tail end of the other - for example
+    '>> "SS" and "HDG-SS" - that search would accidentally match BOTH
+    '>> materials and double-count. The macro checks for this exact
+    '>> situation before writing anything, and refuses to proceed if
+    '>> it finds one, rather than silently producing a wrong total.
+    msg = SuffixClashMsg(d1)
+    If Len(msg) > 0 Then GoTo Abort
+
+    '>> PLAIN ENGLISH: All the checks above have passed, so it is now
+    '>> safe to actually change FINAL SHEET. First, wipe all three
+    '>> blocks clean (unhide every row, clear every value) so the
+    '>> sheet starts from a blank slate...
+    ClearBlocks ws
+
+    '>> PLAIN ENGLISH: ...then write the freshly-calculated totals
+    '>> into each of the three blocks, one call per block. See the
+    '>> "helpers" section below for exactly what each of these does.
+    WriteBlock1 ws, d1, lastRow
+    WriteBlock23 ws, d2, FS_B2_FIRST, FS_B2_LAST, lastRow
+    WriteBlock23 ws, d3, FS_B3_FIRST, FS_B3_LAST, lastRow
+
+    '>> PLAIN ENGLISH: Make sure Excel recalculates FINAL SHEET now
+    '>> that new formulas have been written into it, then put all of
+    '>> Excel's settings (calculation mode, screen updating, events)
+    '>> back exactly the way they were before this macro started.
+    Application.Calculation = xlCalculationAutomatic
+    ws.Calculate
+    If prevCalc <> xlCalculationAutomatic Then Application.Calculation = prevCalc
+
+    Application.ScreenUpdating = prevScreen
+    Application.EnableEvents = prevEvents
+    Exit Sub
+
+Abort:
+    ' The guards all run before anything is written, so the sheet still
+    ' holds the previous, internally consistent list. It is left alone
+    ' on purpose - the message says nothing has changed, and a blanked
+    ' sheet would be worse to find than a slightly stale one.
+    '>> PLAIN ENGLISH: This is where the macro lands if one of the
+    '>> "something looks wrong" checks above triggered. Nothing on
+    '>> FINAL SHEET has been touched - it still shows whatever it
+    '>> showed before you pressed REFRESH. Excel's settings are put
+    '>> back to normal and the explanation message (built up above)
+    '>> is shown to you in a pop-up.
+    If calcSaved Then Application.Calculation = prevCalc
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ReportProblem msg
+    Exit Sub
+
+Fail:
+    '>> PLAIN ENGLISH: This is where the macro lands if something
+    '>> genuinely unexpected went wrong (not one of the checks above,
+    '>> but a real error - e.g. a sheet was renamed or deleted). Same
+    '>> safety behaviour: settings restored, and you're shown Excel's
+    '>> own error number and description so it can be looked into.
+    If calcSaved Then Application.Calculation = prevCalc
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    ReportProblem "FINAL SHEET refresh failed:" & vbLf & vbLf & _
+                  Err.Number & " - " & Err.Description
+End Sub
+
+
+'--------------------------- helpers -----------------------------------
+'>> PLAIN ENGLISH: Everything from here down is a "helper" - a small
+'>> routine that the main RebuildFinalSheet Sub above calls to do one
+'>> specific job, so the main routine doesn't get too long and hard
+'>> to follow. You don't need to run any of these yourself.
+
+'>> PLAIN ENGLISH: Shows the pop-up message box with the problem
+'>> description, UNLESS this is a behind-the-scenes automated test
+'>> run (see gSilent near the top), in which case it just remembers
+'>> the message instead of interrupting with a pop-up.
+Private Sub ReportProblem(ByVal msg As String)
+    gLastProblem = msg
+    If Not gSilent Then
+        MsgBox msg, vbExclamation, "FINAL SHEET"
+    End If
+End Sub
+
+
+'>> PLAIN ENGLISH: A small safety helper used throughout this file:
+'>> "give me this cell's value as a plain number, and if it's blank,
+'>> broken, or not actually a number, just treat it as zero instead
+'>> of causing an error." This is what stops a stray blank cell or a
+'>> broken formula from crashing the whole REFRESH.
+Private Function Num(ByVal v As Variant) As Double
+    If IsEmpty(v) Then
+        Num = 0
+    ElseIf IsError(v) Then
+        Num = 0
+    ElseIf IsNumeric(v) Then
+        Num = CDbl(v)
+    Else
+        Num = 0
+    End If
+End Function
+
+
+'>> PLAIN ENGLISH: Counts how many distinct bolt/stud size+length+
+'>> material combinations actually have a non-zero quantity - used
+'>> for the "will this fit in the block?" capacity check above.
+Private Function CountNonZero(ByRef d As Object) As Long
+    Dim k As Variant, n As Long
+    For Each k In d.keys
+        If Num(d(k)) <> 0 Then n = n + 1
+    Next k
+    CountNonZero = n
+End Function
+
+
+'>> PLAIN ENGLISH: Same idea as above, but for Block 1 (nuts/washers),
+'>> where each entry has four numbers (nut, plain washer, spring
+'>> washer, lock nut) instead of one - counts it if ANY of the four
+'>> is non-zero.
+Private Function CountNonZero1(ByRef d As Object) As Long
+    Dim k As Variant, v As Variant, n As Long
+    For Each k In d.keys
+        v = d(k)
+        If v(0) <> 0 Or v(1) <> 0 Or v(2) <> 0 Or v(3) <> 0 Then n = n + 1
+    Next k
+    CountNonZero1 = n
+End Function
+
+
+'>> PLAIN ENGLISH: Builds the "this block is too small" warning
+'>> message described earlier, but only if it's actually needed
+'>> (i.e. only if "needed" is bigger than "capacity"). Returns an
+'>> empty message otherwise, which the caller reads as "all clear".
+Private Function CapacityMsg(ByVal blockName As String, _
+                             ByVal needed As Long, _
+                             ByVal capacity As Long) As String
+    If needed > capacity Then
+        CapacityMsg = "The " & blockName & " block needs " & needed & _
+            " rows but only has room for " & capacity & "." & vbLf & _
+            vbLf & "Nothing has been changed. The block needs to be " & _
+            "made larger before this job can be summarised."
+    End If
+End Function
+
+
+' Block 1 sums with a wildcard on the length (size & "x*-" & material).
+' If one material name ends with another - e.g. "SS" and "HDG-SS" -
+' that wildcard would match both and over-count. Detect and refuse.
+'>> PLAIN ENGLISH: This is the helper behind the "material name
+'>> clash" safety check explained earlier. It compares every pair of
+'>> material names used in this job and asks: "does one of these end
+'>> with '-' + the other one?" (e.g. does "HDG-SS" end with "-SS"?).
+'>> If it finds such a pair, it builds a warning message naming both
+'>> materials; otherwise it returns nothing, meaning "no clash
+'>> found, safe to proceed."
+Private Function SuffixClashMsg(ByRef d1 As Object) As String
+    Dim k As Variant, mats As Object, a As Variant, b As Variant
+    Set mats = CreateObject("Scripting.Dictionary")
+    For Each k In d1.keys
+        mats(Mid$(k, InStr(k, "|") + 1)) = 1
+    Next k
+    For Each a In mats.keys
+        For Each b In mats.keys
+            If a <> b Then
+                If Len(a) > Len(b) Then
+                    If Right$(UCase$(a), Len(b) + 1) = "-" & UCase$(b) Then
+                        SuffixClashMsg = "Cannot summarise safely: the " & _
+                          "material """ & b & """ is also the ending of """ & _
+                          a & """." & vbLf & vbLf & "The SIZE block totals " & _
+                          "would count both. Nothing has been changed."
+                        Exit Function
+                    End If
+                End If
+            End If
+        Next b
+    Next a
+End Function
+
+
+'>> PLAIN ENGLISH: Empties out all three blocks on FINAL SHEET -
+'>> unhides every row that might have been hidden from a previous
+'>> REFRESH, then clears out the size/material/quantity cells (D
+'>> through J) in all three blocks, ready for fresh data to be
+'>> written in.
+Private Sub ClearBlocks(ByRef ws As Worksheet)
+    ws.Rows(FS_B1_FIRST & ":" & FS_B3_LAST).Hidden = False
+    ws.Range("D" & FS_B1_FIRST & ":J" & FS_B1_LAST).ClearContents
+    ws.Range("D" & FS_B2_FIRST & ":J" & FS_B2_LAST).ClearContents
+    ws.Range("D" & FS_B3_FIRST & ":J" & FS_B3_LAST).ClearContents
+End Sub
+
+
+'>> PLAIN ENGLISH: Writes Block 1 (nuts & washers, one line per size+
+'>> material) onto FINAL SHEET. For each size+material combination
+'>> that actually has a quantity: writes the size into column D and
+'>> the material into column F (both as fixed values, not formulas -
+'>> this is what lets those cells stay merged), then writes a live
+'>> SUMIF-style FORMULA (not a fixed number) into the nut / plain-
+'>> washer / spring-washer / lock-nut columns, so those four numbers
+'>> will keep recalculating themselves automatically from PRINT
+'>> SHEET afterwards, even without pressing REFRESH again, if PRINT
+'>> SHEET's own numbers change. Any rows in the block left over after
+'>> all combinations are written are hidden, so you never see blank
+'>> unused rows.
+Private Sub WriteBlock1(ByRef ws As Worksheet, ByRef d As Object, _
+                        ByVal lastRow As Long)
+    Dim keys As Variant, i As Long, r As Long, j As Long
+    Dim sz As String, mat As String, v As Variant
+    Dim col As Variant, srcCol As Variant
+
+    keys = SortedKeys(d, True)
+    r = FS_B1_FIRST
+    col = Array("G", "H", "I", "J")
+    srcCol = Array("H", "I", "J", "K")
+
+    For i = 0 To UBound2(keys)
+        v = d(keys(i))
+        If v(0) <> 0 Or v(1) <> 0 Or v(2) <> 0 Or v(3) <> 0 Then
+            SplitKey CStr(keys(i)), sz, mat
+            ws.Range("D" & r).Value = sz
+            ws.Range("F" & r).Value = mat
+            For j = 0 To 3
+                ws.Range(col(j) & r).Formula = _
+                    "=SUMIF('PRINT SHEET'!$F$" & PS_FIRST & ":$F$" & lastRow & _
+                    ",$D" & r & "&""x*-""&$F" & r & _
+                    ",'PRINT SHEET'!$" & srcCol(j) & "$" & PS_FIRST & _
+                    ":$" & srcCol(j) & "$" & lastRow & ")" & _
+                    "+SUMIF('PRINT SHEET'!$F$" & PS_FIRST & ":$F$" & lastRow & _
+                    ",$D" & r & "&""-STUDx*-""&$F" & r & _
+                    ",'PRINT SHEET'!$" & srcCol(j) & "$" & PS_FIRST & _
+                    ":$" & srcCol(j) & "$" & lastRow & ")"
+            Next j
+            r = r + 1
+        End If
+    Next i
+
+    If r <= FS_B1_LAST Then ws.Rows(r & ":" & FS_B1_LAST).Hidden = True
+End Sub
+
+
+'>> PLAIN ENGLISH: Writes Block 2 (bolts) or Block 3 (studs) onto
+'>> FINAL SHEET - the same routine handles both, one call for each,
+'>> because the logic is identical. For each size+length+material
+'>> combination with a non-zero quantity: writes the size into column
+'>> D, the material into column F, and a live SUMIF formula into
+'>> column G that totals up the matching quantity straight from
+'>> PRINT SHEET. Leftover rows in the block are hidden, same as
+'>> Block 1.
+Private Sub WriteBlock23(ByRef ws As Worksheet, ByRef d As Object, _
+                         ByVal firstRow As Long, ByVal lastBlockRow As Long, _
+                         ByVal lastRow As Long)
+    Dim keys As Variant, i As Long, r As Long
+    Dim sz As String, mat As String
+
+    keys = SortedKeys(d, False)
+    r = firstRow
+
+    For i = 0 To UBound2(keys)
+        If Num(d(keys(i))) <> 0 Then
+            SplitKey CStr(keys(i)), sz, mat
+            ws.Range("D" & r).Value = sz
+            ws.Range("F" & r).Value = mat
+            ws.Range("G" & r).Formula = _
+                "=SUMIF('PRINT SHEET'!$F$" & PS_FIRST & ":$F$" & lastRow & _
+                ",$D" & r & "&""-""&$F" & r & _
+                ",'PRINT SHEET'!$G$" & PS_FIRST & ":$G$" & lastRow & ")"
+            r = r + 1
+        End If
+    Next i
+
+    If r <= lastBlockRow Then ws.Rows(r & ":" & lastBlockRow).Hidden = True
+End Sub
+
+
+'>> PLAIN ENGLISH: A small utility that splits one of the internal
+'>> tally-sheet labels (like "M12|HDG-8.8") back apart at the "|"
+'>> character into its size half and material half, so they can be
+'>> written into two separate columns.
+Private Sub SplitKey(ByVal k As String, ByRef sz As String, _
+                     ByRef mat As String)
+    Dim p As Long
+    p = InStr(k, "|")
+    sz = Left$(k, p - 1)
+    mat = Mid$(k, p + 1)
+End Sub
+
+
+'>> PLAIN ENGLISH: A small technical safety helper - works out how
+'>> many entries are in a list, and quietly returns "-1" instead of
+'>> an error if the list happens to be completely empty (which would
+'>> otherwise happen, for example, if a job had zero studs at all).
+Private Function UBound2(ByVal a As Variant) As Long
+    On Error Resume Next
+    UBound2 = -1
+    UBound2 = UBound(a)
+End Function
+
+
+' Sort by numeric size, then numeric length, then material.
+' A text sort would put M10 before M4.
+'>> PLAIN ENGLISH: Decides what order the size/material lines appear
+'>> in on FINAL SHEET - smallest thread size first, then (for bolts/
+'>> studs) shortest length first, then alphabetically by material.
+'>> The comment above explains why this needed care: a plain
+'>> alphabetical sort would wrongly put "M10" before "M4" (because
+'>> "1" comes before "4" as text), so this instead sorts by the
+'>> actual number.
+Private Function SortedKeys(ByRef d As Object, _
+                            ByVal sizeOnly As Boolean) As Variant
+    Dim keys As Variant, rank As Variant
+    Dim i As Long, j As Long, tmp As Variant, n As Long
+
+    If d.Count = 0 Then
+        SortedKeys = Array()
+        Exit Function
+    End If
+
+    keys = d.keys
+    n = UBound(keys)
+    ReDim rank(0 To n)
+    For i = 0 To n
+        rank(i) = SortRank(CStr(keys(i)), sizeOnly)
+    Next i
+
+    For i = 0 To n - 1
+        For j = i + 1 To n
+            If rank(j) < rank(i) Then
+                tmp = keys(i): keys(i) = keys(j): keys(j) = tmp
+                tmp = rank(i): rank(i) = rank(j): rank(j) = tmp
+            End If
+        Next j
+    Next i
+
+    SortedKeys = keys
+End Function
+
+
+' Returns a sortable string: size zero-padded, length zero-padded,
+' then material.
+'>> PLAIN ENGLISH: Turns a size (like "M12") and a length (like "60")
+'>> into a padded text code like "012" + "0060" that sorts correctly
+'>> as plain text - this is the trick that makes the "smallest size
+'>> first, shortest length first" ordering described above actually
+'>> work in a simple sort.
+Private Function SortRank(ByVal k As String, _
+                          ByVal sizeOnly As Boolean) As String
+    Dim sz As String, mat As String, body As String
+    Dim nSize As Long, nLen As Long, p As Long
+
+    SplitKey k, body, mat
+
+    If sizeOnly Then
+        nSize = CLng(Mid$(body, 2))
+        nLen = 0
+    Else
+        p = InStr(2, body, "X")
+        If p = 0 Then
+            nSize = CLng(Mid$(body, 2))
+            nLen = 0
+        Else
+            sz = Mid$(body, 2, p - 2)
+            ' strip a "-STUD" suffix off the size part
+            If InStr(sz, "-") > 0 Then sz = Left$(sz, InStr(sz, "-") - 1)
+            nSize = CLng(sz)
+            nLen = CLng(Mid$(body, p + 1))
+        End If
+    End If
+
+    SortRank = Format$(nSize, "000") & Format$(nLen, "0000") & mat
+End Function
+
+====================================================================
+END OF FinalSheetBuilder
+====================================================================
