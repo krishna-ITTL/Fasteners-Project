@@ -115,6 +115,15 @@ Sub RunVerification()
     src = th.Range("B" & TH_FIRST & ":R" & TH_LAST).Value
     src2 = sdi.Range("B" & SDI_FIRST & ":R" & SDI_LAST).Value
 
+    ' Location (B) and joint type (D) are often typed once and merged down
+    ' over several rows (e.g. SD-272 over STD DATA D38:D49). A bulk read
+    ' only returns the value in the top cell of a merged block, so every
+    ' row below it looked blank and was reported UNVERIFIABLE.
+    FillMergedDown th, src, TH_FIRST, 1      ' column B, location
+    FillMergedDown th, src, TH_FIRST, 3      ' column D, joint type
+    FillMergedDown sdi, src2, SDI_FIRST, 1
+    FillMergedDown sdi, src2, SDI_FIRST, 3
+
     msg = RangeGuard(th, TH_LAST, TH_GUARD)
     If Len(msg) = 0 Then msg = RangeGuard(sdi, SDI_LAST, SDI_GUARD)
     If Len(msg) > 0 Then GoTo Abort
@@ -664,6 +673,21 @@ Private Function RangeChunk(ByVal a As Long, ByVal b As Long) As String
         RangeChunk = CStr(a) & "-" & CStr(b)
     End If
 End Function
+
+
+' For each row of src whose cell in column c (1 = B) is empty but sits
+' inside a merged block, copy in the block's top-left value - what the
+' person sees in that row on screen.
+Private Sub FillMergedDown(ByRef ws As Worksheet, ByRef src As Variant, _
+                           ByVal firstRow As Long, ByVal c As Long)
+    Dim i As Long, cell As Range
+    For i = 1 To UBound(src, 1)
+        If IsEmpty(src(i, c)) Then
+            Set cell = ws.Cells(firstRow + i - 1, c + 1)
+            If cell.MergeCells Then src(i, c) = cell.MergeArea.Cells(1, 1).Value
+        End If
+    Next i
+End Sub
 
 
 ' Text of a cell value; an error value (#N/A, #REF!) becomes "" instead of

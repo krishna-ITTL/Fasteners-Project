@@ -54,6 +54,17 @@ try:
     check("totals agree: inputs = PRINT SHEET = FINAL (TH 59/60 now linked)",
           not has(base, item="TOTAL"), [f[9] for f in has(base, item="TOTAL")])
 
+    # merged cells: STD DATA D38:D49 holds SD-272 once; rows 39-49 must read it too
+    check("merged joint type (STD DATA D38:D49) is not UNVERIFIABLE",
+          not [f for f in base if f[10] == "UNVERIFIABLE" and "SD 4" in str(f[0])], [f[0] for f in base if f[10] == "UNVERIFIABLE"])
+    q40 = sdi.Range("Q40").Formula
+    sdi.Range("Q40").Formula = "=O40*2"               # 2 plain washers per nut on an SD-272 row
+    _, rows, _ = run()
+    hit = has(rows, ref="SD 40", item="P.WASHER", sev="ERROR")
+    check("merged row SD 40 checked against SD-272, with its merged location",
+          bool(hit) and hit[0][2] == "SD-272" and hit[0][1], [(f[1], f[2]) for f in hit])
+    sdi.Range("Q40").Formula = q40
+
     # a new deviation on STD DATA is caught, with its row
     # 15NB gate valve (row 15, SD-268): nut = bolt -> make it 2 per bolt
     sdi.Range("O15").Formula = "=N15*2"
