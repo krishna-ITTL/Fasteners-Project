@@ -432,7 +432,7 @@ End Sub
 '   header row : D:E merged, bold, centred
 '   data rows  : D:E merged location, F..K centred numbers
 '   TOTAL row  : F..J = SUM of the data rows (a live formula)
-Private Function WriteBlock(ByRef ws As Worksheet, ByVal partKey As String, _
+Private Function WriteBlock(ByRef ws As Worksheet, ByVal PartKey As String, _
                            ByRef items As Collection, ByVal r As Long) As Long
     Dim firstRow As Long, dataFirst As Long, dataLast As Long
     Dim rec As Variant, c As Long
@@ -443,7 +443,7 @@ Private Function WriteBlock(ByRef ws As Worksheet, ByVal partKey As String, _
     ' --- Title bar: the part name
     With ws.Range(ws.Cells(r, "D"), ws.Cells(r, "K"))
         .Merge
-        .Value = partKey
+        .Value = PartKey
         .Font.Size = 16
         .Interior.Color = RGB(255, 255, 0)
         .HorizontalAlignment = xlLeft
@@ -453,7 +453,7 @@ Private Function WriteBlock(ByRef ws As Worksheet, ByVal partKey As String, _
     r = r + 1
 
     ' --- Column headings. A stud block says STUD instead of BOLT.
-    If InStr(partKey, "-STUD") > 0 Then
+    If InStr(PartKey, "-STUD") > 0 Then
         heads = Array("STUD", "NUT", "P. WASHER", "S. WASHER", "L.NUT", "STD.REF")
     Else
         heads = Array("BOLT", "NUT", "P. WASHER", "S. WASHER", "L.NUT", "STD.REF")

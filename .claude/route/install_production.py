@@ -9,6 +9,10 @@ import sys
 import win32com.client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Single home of the macro source: "<repo>/VBA code for Fastener/<Module>.bas".
+# Whenever VBA is changed in a workbook, that folder is refreshed from Excel.
+VBA_DIR = os.path.join(HERE, "..", "..", "VBA code for Fastener")
+MODULES = ("Module1", "FinalSheetBuilder", "ProductionSheetBuilder", "VerificationBuilder")
 wb_path = os.path.abspath(sys.argv[1])
 
 xl = win32com.client.DispatchEx("Excel.Application")   # own instance, not the user's
@@ -18,12 +22,15 @@ try:
     wb = xl.Workbooks.Open(wb_path)
     comps = wb.VBProject.VBComponents
 
-    for name in ("Module1", "FinalSheetBuilder", "ProductionSheetBuilder", "VerificationBuilder"):
+    for name in MODULES:
         try:
             comps.Remove(comps.Item(name))
         except Exception:
             pass
-        comps.Import(os.path.join(HERE, name + ".bas"))
+        comps.Import(os.path.join(VBA_DIR, name + ".bas"))
+    # Write back exactly what Excel now holds (it re-cases identifiers).
+    for name in MODULES:
+        comps.Item(name).Export(os.path.abspath(os.path.join(VBA_DIR, name + ".bas")))
 
     # TANK HARDWARE rows 59 and 60 (added in revision R2) were never linked on
     # PRINT SHEET, so 16 bolts were missing from FINAL / PRODUCTION SHEET.
