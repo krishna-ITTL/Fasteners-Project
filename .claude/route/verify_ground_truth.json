@@ -1,0 +1,202 @@
+{
+ "grouped": [
+  [
+   "SD-269",
+   "P.WASHER",
+   "ERROR",
+   "2 per bolt vs standard 1",
+   97
+  ],
+  [
+   "SD-269",
+   "S.WASHER",
+   "ERROR",
+   "0 per bolt vs standard 1",
+   60
+  ],
+  [
+   "PSD-686",
+   "-",
+   "UNVERIFIABLE",
+   "joint type not in STD.DATA",
+   6
+  ],
+  [
+   "SD-272",
+   "BOLT/STUD",
+   "ERROR",
+   "standard buys no fastener, qty is 6",
+   5
+  ]
+ ],
+ "individual": [
+  [
+   37,
+   "SD-267",
+   "P.WASHER",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   65,
+   "SD-272",
+   "P.WASHER",
+   "ERROR",
+   "2 per nut vs standard 1"
+  ],
+  [
+   67,
+   "SD-269",
+   "S.WASHER",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   68,
+   "SD-269",
+   "S.WASHER",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   69,
+   "SD-269",
+   "S.WASHER",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   90,
+   "SD-269",
+   "NUT",
+   "ERROR",
+   "0 per bolt vs standard 1"
+  ],
+  [
+   101,
+   "SD-272",
+   "P.WASHER",
+   "ERROR",
+   "2 per nut vs standard 1"
+  ],
+  [
+   115,
+   "SD-272",
+   "P.WASHER",
+   "ERROR",
+   "2 per nut vs standard 1"
+  ],
+  [
+   145,
+   "SD-268",
+   "S.WASHER",
+   "ERROR",
+   "1 per bolt vs standard 0"
+  ],
+  [
+   207,
+   "SD-269",
+   "NUT",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   208,
+   "SD-269",
+   "NUT",
+   "ERROR",
+   "2 per bolt vs standard 1"
+  ],
+  [
+   208,
+   "SD-269",
+   "P.WASHER",
+   "ERROR",
+   "0.5 per bolt vs standard 1"
+  ],
+  [
+   210,
+   "SD-269",
+   "BOLT/STUD",
+   "INFO",
+   "standard expects a fastener but quantity is 0"
+  ],
+  [
+   211,
+   "SD-269",
+   "BOLT/STUD",
+   "INFO",
+   "standard expects a fastener but quantity is 0"
+  ],
+  [
+   212,
+   "SD-269",
+   "BOLT/STUD",
+   "INFO",
+   "standard expects a fastener but quantity is 0"
+  ],
+  [
+   213,
+   "SD-269",
+   "NUT",
+   "ERROR",
+   "0 per bolt vs standard 1"
+  ],
+  [
+   240,
+   "PSD-510",
+   "-",
+   "UNVERIFIABLE",
+   "joint type not in STD.DATA"
+  ],
+  [
+   240,
+   "",
+   "TEXT",
+   "INFO",
+   "description says M24x300"
+  ],
+  [
+   241,
+   "(blank)",
+   "-",
+   "UNVERIFIABLE",
+   "joint type not in STD.DATA"
+  ],
+  [
+   241,
+   "",
+   "TEXT",
+   "INFO",
+   "description says M20x250"
+  ],
+  [
+   242,
+   "(blank)",
+   "-",
+   "UNVERIFIABLE",
+   "joint type not in STD.DATA"
+  ],
+  [
+   242,
+   "",
+   "TEXT",
+   "INFO",
+   "description says M16x200"
+  ],
+  [
+   243,
+   "(blank)",
+   "-",
+   "UNVERIFIABLE",
+   "joint type not in STD.DATA"
+  ],
+  [
+   243,
+   "",
+   "TEXT",
+   "INFO",
+   "description says M12x200"
+  ]
+ ]
+}
